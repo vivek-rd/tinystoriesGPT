@@ -12,8 +12,10 @@ tokenizer.pad_token = tokenizer.eos_token
 dataset = dataset.map(lambda e: tokenizer(e['text'], 
                                           truncation=True, 
                                           padding='max_length', 
-                                          max_length=BLOCK_SIZE
+                                          # max_length plus one to get the next tokens
+                                          max_length=BLOCK_SIZE + 1
                                           ), batched=True)
+dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
 dataset.save_to_disk('tokenized_tinystories')
 
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=BATCH_SIZE)
