@@ -17,7 +17,7 @@ def create_dataset(tokenizer_model, block_size, split='train'):
                                             truncation=True, 
                                             padding='max_length', 
                                             # max_length plus one to get the next tokens
-                                            max_length=BLOCK_SIZE + 1
+                                            max_length=block_size + 1
                                             ), batched=True)
     dataset.set_format(type='torch', columns=['input_ids', 'attention_mask'])
     dataset.save_to_disk(f'{split}_tokenized_tinystories')
