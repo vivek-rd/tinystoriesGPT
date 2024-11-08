@@ -1,6 +1,7 @@
 import os
 import torch
 
+import matplotlib.pyplot as plt
 from model import GPTConfig, GPT
 from datasets import load_from_disk
 from transformers import AutoTokenizer
@@ -87,9 +88,17 @@ def calculate_validation_loss(model, val_dataloader):
     return eval_loss/len(val_dataloader)
 
 
-# def plot_training_curve()
+def plot_training_curve(batch_losses, eval_loss, eval_loss_index):
+    plt.plot(batch_losses)
+    plt.scatter(eval_loss_index, eval_loss, color='orange')
+    plt.savefig('train_vs_eval.png')
 
 
+batch_losses = []
+eval_loss = []
+eval_loss_index = []
+
+global_batch_index = 0
 for epoch in range(NUM_EPOCHS):
     
     model.train()
@@ -113,6 +122,7 @@ for epoch in range(NUM_EPOCHS):
         # optimizer.step()
 
         running_loss += loss.item()
+        batch_losses.append(loss.item())
 
         if batch_loss < 2.05 and batch_loss > 0.9 :
             print(f'Final stopping loss - {batch_loss}')
@@ -121,12 +131,15 @@ for epoch in range(NUM_EPOCHS):
         if idx % 50 == 0:
             # average batch loss for every 1000 batches
             batch_loss = running_loss / 50
+            batch_losses.append(batch_loss)
             if idx % 250 == 0:
                 eval_loss = calculate_validation_loss(model, val_dataloader)
                 print(f"epoch - {epoch} | batch - {idx} | batch_loss - {batch_loss:.4f} | val_loss - {eval_loss:.4f}")
             else:
                 print(f"epoch - {epoch} | batch - {idx} | batch_loss - {batch_loss:.4f}")
             running_loss = 0
+        
+        global_batch_index += 1
 
 # checkpoint and save the model
 # write logic to check if init_from is resume to resume training from a checkpoint
