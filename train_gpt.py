@@ -12,8 +12,8 @@ torch._dynamo.config.suppress_errors = True
 NUM_EPOCHS = 1
 device = 'cuda'
 
-vocab_size = 50304
-n_layer = 8
+vocab_size = 5000
+n_layer = 6
 n_head = 8
 n_embd = 128
 block_size = 256
@@ -31,22 +31,35 @@ grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
 decay_lr = False
 compile = True
 
+checkpoint_iter = 1000 # save checkpoint after every 1000 iterations
+
 init_from = 'resume'
+resume_checkpoint_path = './output/ckpt_batch_num_1051.cpt'
 
 torch.set_float32_matmul_precision("high")
 
-dataset = load_from_disk('tokenized_tinystories')
+dataset = load_from_disk('train_tiny_tokenizer_tokenized_tinystories')
 dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
 
-val_dataset = load_from_disk('validation_tokenized_tinystories')
+val_dataset = load_from_disk('validation_tiny_tokenizer_tokenized_tinystories')
 val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size)
 
-model_args = {'vocab_size':vocab_size, 'n_layer':n_layer, 'n_head':n_head, 'n_embd':n_embd, 'block_size':block_size, 'bias':bias, 'dropout':dropout}
+if init_from == 'resume' and (not os.path.exists(resume_checkpoint_path)):
+    print('Changing the init_from variable to scratch i.e training the model from scratch as the checkpoint does not exist')
+    init_from = 'scratch'
 
-if init_from == 'resume' and os.path.exists('./output/ckpt.cpt'):
-    checkpoint = torch.load('./output/ckpt.cpt', map_location=device)
+if init_from == 'resume' and os.path.exists(resume_checkpoint_path):
+    checkpoint = torch.load(resume_checkpoint_path, map_location=device)
     state_dict = checkpoint['model']
     model_args = checkpoint['model_args']
+
+    # import losses values for plotting the train_vs_eval curve
+    batch_losses = checkpoint['batch_losses']
+    eval_losses = checkpoint['eval_losses']
+    eval_loss_index = checkpoint['eval_loss_index']
+    global_batch_index = checkpoint['global_batch_index']
+    print(f'Length of batch losses - {len(batch_losses)}')
+
     gpt_config = GPTConfig(**model_args)
     model = GPT(gpt_config)
 
@@ -56,8 +69,15 @@ if init_from == 'resume' and os.path.exists('./output/ckpt.cpt'):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
     model.load_state_dict(state_dict)
 else:
+    print('Training the model from scratch')
+    model_args = {'vocab_size':vocab_size, 'n_layer':n_layer, 'n_head':n_head, 'n_embd':n_embd, 'block_size':block_size, 'bias':bias, 'dropout':dropout}
     gpt_config = GPTConfig(**model_args)
     model = GPT(gpt_config)
+
+    batch_losses = []
+    eval_losses = []
+    eval_loss_index = []
+    global_batch_index = 0
 
 model = model.to(device)
 if compile:
@@ -88,22 +108,44 @@ def calculate_validation_loss(model, val_dataloader):
     return eval_loss/len(val_dataloader)
 
 
-def plot_training_curve(batch_losses, eval_loss, eval_loss_index):
-    plt.plot(batch_losses)
-    plt.scatter(eval_loss_index, eval_loss, color='orange')
-    plt.savefig('train_vs_eval.png')
+def save_model(
+    model, 
+    optimizer, 
+    model_args,
+    batch_losses,
+    eval_losses,
+    eval_loss_index,
+    global_batch_index,
+    checkpoint_path
+    ):
+
+    checkpoint = {
+    'model': model.state_dict(),
+    'optimizer': optimizer.state_dict(),
+    'model_args': model_args,
+    'batch_losses': batch_losses,
+    'eval_losses': eval_losses,
+    'eval_loss_index': eval_loss_index,
+    'global_batch_index': global_batch_index
+    }
+
+    torch.save(checkpoint, os.path.join(checkpoint_path, f'ckpt_batch_num_{global_batch_index}.cpt'))
 
 
-batch_losses = []
-eval_loss = []
-eval_loss_index = []
+def plot_training_curve(batch_losses, eval_losses, eval_loss_index, global_batch_index):
+    plt.plot(batch_losses, label='training loss')
+    plt.scatter(eval_loss_index, eval_losses, color='orange', label='validation loss')
+    plt.xlabel('Batch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.savefig(f'train_vs_eval_{global_batch_index}.png')
 
-global_batch_index = 0
+
 for epoch in range(NUM_EPOCHS):
     
     model.train()
     running_loss = 0
-    batch_loss = 0
+    average_batch_loss = 0
     
     for idx, batch in enumerate(dataloader):
         X, Y = batch['input_ids'][:, 0:-1], batch['input_ids'][:, 1:]
@@ -124,22 +166,36 @@ for epoch in range(NUM_EPOCHS):
         running_loss += loss.item()
         batch_losses.append(loss.item())
 
-        if batch_loss < 2.05 and batch_loss > 0.9 :
-            print(f'Final stopping loss - {batch_loss}')
+        if average_batch_loss < 2.2 and average_batch_loss > 0.9 :
+            print(f'Final stopping loss - {average_batch_loss}')
             break
 
         if idx % 50 == 0:
-            # average batch loss for every 1000 batches
-            batch_loss = running_loss / 50
-            batch_losses.append(batch_loss)
+            # average batch loss for every 50 batches
+            average_batch_loss = running_loss / 50
+
             if idx % 250 == 0:
                 eval_loss = calculate_validation_loss(model, val_dataloader)
-                print(f"epoch - {epoch} | batch - {idx} | batch_loss - {batch_loss:.4f} | val_loss - {eval_loss:.4f}")
+                eval_loss_index.append(global_batch_index)
+                eval_losses.append(eval_loss)
+                print(f"epoch - {epoch} | batch - {idx} | average_batch_loss - {average_batch_loss:.4f} | val_loss - {eval_loss:.4f}")
             else:
-                print(f"epoch - {epoch} | batch - {idx} | batch_loss - {batch_loss:.4f}")
+                print(f"epoch - {epoch} | batch - {idx} | average_batch_loss - {average_batch_loss:.4f}")
             running_loss = 0
         
+        if global_batch_index % checkpoint_iter == 0 and global_batch_index != 0:
+            save_model(model,
+                    optimizer,
+                    model_args,
+                    batch_losses,
+                    eval_losses,
+                    eval_loss_index,
+                    global_batch_index,
+                    checkpoint_path='./checkpoints')
+
         global_batch_index += 1
+
+
 
 # checkpoint and save the model
 # write logic to check if init_from is resume to resume training from a checkpoint
@@ -153,15 +209,17 @@ for epoch in range(NUM_EPOCHS):
 # reduce vocab size
 
 
-checkpoint = {
-    'model': model.state_dict(),
-    'optimizer': optimizer.state_dict(),
-    'model_args': model_args
-}
-torch.save(checkpoint, './output/ckpt.cpt')
+save_model(model,
+            optimizer,
+            model_args,
+            batch_losses,
+            eval_losses,
+            eval_loss_index,
+            global_batch_index,
+            checkpoint_path='./output')
 
 prompt = 'Once upon a time'
-tokenizer = AutoTokenizer.from_pretrained('gpt2')
+tokenizer = AutoTokenizer.from_pretrained('tiny_tokenizer')
 tokenizer.pad_token = tokenizer.eos_token
 
 # tokenized_input = tokenizer(prompt, truncation=True, padding='max_length', max_length=block_size)
@@ -169,8 +227,7 @@ tokenized_input = (torch.tensor(tokenizer.encode(prompt), dtype=torch.long, devi
 
 model.eval()
 output = model.generate(tokenized_input, max_new_tokens=50, temperature=1, top_k=20)
-print(type(output))
-print(output)
 decoded_output = [tokenizer.decode(i) for i in output]
 print(decoded_output)
 
+plot_training_curve(batch_losses, eval_losses, eval_loss_index, global_batch_index)
