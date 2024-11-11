@@ -16,10 +16,13 @@ RUN apt-get update && \
 
 WORKDIR /root
 COPY requirements.txt .
-COPY start_training.sh .
 
 RUN python3 -m venv env
 RUN source env/bin/activate
 RUN pip install -r requirements.txt
 
-ENTRYPOINT ["source", "start_training.sh"]
+COPY start_training.sh .
+RUN chmod +x start_training.sh
+ENV PATH="/root/env/bin:$PATH"
+
+ENTRYPOINT ["bash", "start_training.sh"]
